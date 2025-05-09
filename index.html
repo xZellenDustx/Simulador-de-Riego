@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulador de Riego con Monte Carlo</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        .control-panel {
+            flex: 1;
+            min-width: 300px;
+            border: 1px solid #ddd;
+            padding: 20px;
+            border-radius: 8px;
+            background: #f9f9f9;
+        }
+        .results {
+            flex: 2;
+            min-width: 500px;
+        }
+        .chart-container {
+            width: 100%;
+            height: 400px;
+            margin-bottom: 30px;
+            border: 1px solid #eee;
+            border-radius: 8px;
+            padding: 10px;
+            background: white;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        input[type="number"] {
+            width: 100px;
+            padding: 8px;
+            margin: 5px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            padding: 12px 24px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 15px;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .metric-card {
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 15px;
+            text-align: center;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .metric-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #2e7d32;
+            margin: 10px 0;
+        }
+        h2 {
+            color: #2e7d32;
+            margin-top: 0;
+        }
+        label {
+            display: block;
+            margin: 10px 0 5px;
+            font-weight: bold;
+        }
+        .loading-placeholder {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #666;
+        }
+        
+        .spinner {
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #4CAF50;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin-bottom: 15px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .plot-description {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+            border-left: 4px solid #4CAF50;
+        }
+    </style>
+</head>
+<body>
+    <h1>Simulador de Sistema de Riego con Método Monte Carlo</h1>
+    
+    <div class="container">
+        <div class="control-panel">
+            <h2>Parámetros de Simulación</h2>
+            
+            <label for="humedad">Humedad Media del Suelo (%):</label>
+            <input type="number" id="humedad" value="50" min="0" max="100" step="1">
+            
+            <label for="temperatura">Temperatura Media Ambiente (°C):</label>
+            <input type="number" id="temperatura" value="28" min="-10" max="50" step="1">
+            
+            <label for="simulaciones">Número de Simulaciones:</label>
+            <input type="number" id="simulaciones" value="10000" min="1000" max="100000" step="1000">
+            
+            <button id="btn-simular">Ejecutar Simulación</button>
+            <button id="btn-sensibilidad">Análisis de Sensibilidad</button>
+            
+            <div id="status" style="margin-top: 15px;"></div>
+        </div>
+        
+        <div class="results">
+            <h2>Resultados de la Simulación</h2>
+            
+            <div class="metrics" id="metrics">
+                <!-- Las métricas se insertarán aquí dinámicamente -->
+            </div>
+            
+            
+            <div class="chart-container">
+                <h3>Análisis de Sensibilidad 3D</h3>
+                <div class="plot-description">
+                    <p>Este gráfico muestra cómo la eficiencia del riego varía según las condiciones ambientales. Gírelo con el mouse para explorar diferentes perspectivas.</p>
+                </div>
+                <div id="sensibilidadPlot" style="height: 400px;">
+                                      <div class="plot-description">
+                        <p>Michh dejame ver a la niña yo tambien soy su padre, hazme un hijo"</p>
+                    </div>
+                    <div class="loading-placeholder" id="loading3D">
+                        <div class="spinner"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Variables para almacenar los gráficos
+        let humedadChart, tempChart, scatterChart, boxplotChart;
+        let resultadosSimulacion = null;
+        
+        // Clase del sistema de riego (adaptada para el navegador)
+        class SistemaRiego {
+            constructor() {
+                this.humedad_optima = 60;  // % de humedad óptima
+                this.temp_optima = 25;     // °C temperatura óptima
+                this.retraso_actuador = 2; // segundos
+                this.caudal_nominal = 5;   // L/min
+            }
+            
+            simular_riego(humedad_media, temp_media, num_simulaciones) {
+                // Generar distribuciones probabilísticas para las variables de entrada
+                const humedades = this.generarNormal(humedad_media, 5, num_simulaciones);
+                const temperaturas = this.generarNormal(temp_media, 3, num_simulaciones);
+                const retrasos = this.generarExponencial(this.retraso_actuador, num_simulaciones);
+                const caudales = this.generarUniforme(this.caudal_nominal*0.9, this.caudal_nominal*1.1, num_simulaciones);
+                
+                // Calcular métricas de desempeño
+                let eficiencia = [];
+                let errores = 0;
+                let tiempos_activacion = [];
+                let riego_eficiente = 0;
+                
+                for (let i = 0; i < num_simulaciones; i++) {
+                    // Condición para activar el riego
+                    const necesita_riego = humedades[i] < this.humedad_optima * 0.9 || temperaturas[i] > this.temp_optima * 1.2;
+                    
+                    // Simular retraso en la activación
+                    const tiempo_respuesta = necesita_riego ? retrasos[i] : 0;
+                    tiempos_activacion.push(tiempo_respuesta);
+                    
+                    // Calcular eficiencia del riego
+                    if (necesita_riego) {
+                        const eficiencia_riego = Math.min(100, (caudales[i] / this.caudal_nominal) * 100 * 
+                                              (1 - Math.max(0, tiempo_respuesta - 2)/10));
+                        eficiencia.push(eficiencia_riego);
+                        
+                        // Contar riegos eficientes (eficiencia > 80%)
+                        if (eficiencia_riego > 80) {
+                            riego_eficiente++;
+                        }
+                    } else {
+                        // Falso positivo: riego cuando no se necesita (5% de probabilidad de error)
+                        if (Math.random() < 0.05) {
+                            errores++;
+                        }
+                    }
+                }
+                
+                // Calcular probabilidades y métricas
+                const prob_error = errores / num_simulaciones * 100;
+                const prob_eficiente = riego_eficiente / num_simulaciones * 100;
+                const tiempo_optimo = this.calcularPercentil(tiempos_activacion, 95);
+                
+                return {
+                    prob_error: prob_error,
+                    prob_eficiente: prob_eficiente,
+                    tiempo_optimo: tiempo_optimo,
+                    eficiencia_promedio: eficiencia.length > 0 ? 
+                        eficiencia.reduce((a, b) => a + b, 0) / eficiencia.length : 0,
+                    humedades: humedades,
+                    temperaturas: temperaturas,
+                    retrasos: retrasos,
+                    caudales: caudales
+                };
+            }
+            
+            analizar_sensibilidad(humedad_range, temp_range, num_simulaciones) {
+                const resultados = [];
+                const humedades = this.linspace(humedad_range[0], humedad_range[1], 5);
+                const temperaturas = this.linspace(temp_range[0], temp_range[1], 5);
+                
+                for (const h of humedades) {
+                    for (const t of temperaturas) {
+                        const res = this.simular_riego(h, t, num_simulaciones);
+                        resultados.push({
+                            humedad: h,
+                            temperatura: t,
+                            prob_eficiente: res.prob_eficiente,
+                            prob_error: res.prob_error
+                        });
+                    }
+                }
+                
+                return resultados;
+            }
+            
+            // Funciones auxiliares para generación de números aleatorios
+            generarNormal(mean, stdDev, size) {
+                const result = [];
+                for (let i = 0; i < size; i++) {
+                    let u = 0, v = 0;
+                    while (u === 0) u = Math.random();
+                    while (v === 0) v = Math.random();
+                    const z = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+                    result.push(mean + stdDev * z);
+                }
+                return result;
+            }
+            
+            generarExponencial(lambda, size) {
+                const result = [];
+                for (let i = 0; i < size; i++) {
+                    result.push(-Math.log(1 - Math.random()) / lambda);
+                }
+                return result;
+            }
+            
+            generarUniforme(min, max, size) {
+                const result = [];
+                for (let i = 0; i < size; i++) {
+                    result.push(min + Math.random() * (max - min));
+                }
+                return result;
+            }
+            
+            calcularPercentil(arr, p) {
+                const sorted = [...arr].sort((a, b) => a - b);
+                const pos = (sorted.length - 1) * p / 100;
+                const base = Math.floor(pos);
+                const rest = pos - base;
+                
+                if (sorted[base + 1] !== undefined) {
+                    return sorted[base] + rest * (sorted[base + 1] - sorted[base]);
+                } else {
+                    return sorted[base];
+                }
+            }
+            
+            linspace(start, end, num) {
+                const step = (end - start) / (num - 1);
+                return Array.from({length: num}, (_, i) => start + step * i);
+            }
+        }
+        
+        // Función para mostrar métricas
+        function mostrarMetricas(resultados) {
+            const metricsContainer = document.getElementById('metrics');
+            metricsContainer.innerHTML = `
+                <div class="metric-card">
+                    <div>Probabilidad de Error</div>
+                    <div class="metric-value">${resultados.prob_error.toFixed(2)}%</div>
+                    <div>Riegos innecesarios</div>
+                </div>
+                <div class="metric-card">
+                    <div>Probabilidad de Riego Eficiente</div>
+                    <div class="metric-value">${resultados.prob_eficiente.toFixed(2)}%</div>
+                    <div>Eficiencia > 80%</div>
+                </div>
+                <div class="metric-card">
+                    <div>Tiempo Óptimo de Activación</div>
+                    <div class="metric-value">${resultados.tiempo_optimo.toFixed(2)}s</div>
+                    <div>(95% de casos)</div>
+                </div>
+                <div class="metric-card">
+                    <div>Eficiencia Promedio</div>
+                    <div class="metric-value">${resultados.eficiencia_promedio.toFixed(2)}%</div>
+                    <div>Del riego activado</div>
+                </div>
+            `;
+        }
+        
+        function actualizarGraficos(resultados) {
+            // Función auxiliar para destruir gráficos de forma segura
+            const safeDestroyChart = (chart) => {
+                try {
+                    if (chart && typeof chart.destroy === 'function') {
+                        chart.destroy();
+                    }
+                } catch (e) {
+                    console.error('Error al destruir gráfico:', e);
+                }
+                return null;
+            };
+
+            // Destruye todos los gráficos existentes
+            humedadChart = safeDestroyChart(humedadChart);
+            tempChart = safeDestroyChart(tempChart);
+            scatterChart = safeDestroyChart(scatterChart);
+            boxplotChart = safeDestroyChart(boxplotChart);
+
+            // Crea nuevos gráficos con manejo de errores
+            try {
+                // Histograma de humedades
+                const ctxHumedad = document.getElementById('histogramaHumedad').getContext('2d');
+                humedadChart = new Chart(ctxHumedad, {
+                    type: 'histogram',
+                    data: {
+                        datasets: [{
+                            label: 'Distribución de Humedad del Suelo',
+                            data: resultados.humedades,
+                            backgroundColor: 'rgba(54, 162, 235, 0.7)',
+                            borderColor: 'rgba(54, 162, 235, 1)',
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            x: { title: { display: true, text: 'Humedad (%)' } },
+                            y: { title: { display: true, text: 'Frecuencia' }, beginAtZero: true }
+                        }
+                    }
+                });
+
+                // Histograma de temperaturas
+                const ctxTemp = document.getElementById('histogramaTemperatura').getContext('2d');
+                tempChart = new Chart(ctxTemp, {
+                    type: 'histogram',
+                    data: {
+                        datasets: [{
+                            label: 'Distribución de Temperaturas',
+                            data: resultados.temperaturas,
+                            backgroundColor: 'rgba(255, 99, 132, 0.7)',
+                            borderColor: 'rgba(255, 99, 132, 1)',
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            x: { title: { display: true, text: 'Temperatura (°C)' } },
+                            y: { title: { display: true, text: 'Frecuencia' }, beginAtZero: true }
+                        }
+                    }
+                });
+
+                // Scatter plot
+                const ctxScatter = document.getElementById('scatterPlot').getContext('2d');
+                scatterChart = new Chart(ctxScatter, {
+                    type: 'scatter',
+                    data: {
+                        datasets: [{
+                            label: 'Relación Humedad-Temperatura',
+                            data: resultados.humedades.map((h, i) => ({x: h, y: resultados.temperaturas[i]})),
+                            backgroundColor: 'rgba(75, 192, 192, 0.5)',
+                            borderColor: 'rgba(75, 192, 192, 1)',
+                            borderWidth: 1,
+                            pointRadius: 3
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            x: { title: { display: true, text: 'Humedad (%)' } },
+                            y: { title: { display: true, text: 'Temperatura (°C)' } }
+                        }
+                    }
+                });
+
+                // Boxplot
+                const ctxBoxplot = document.getElementById('boxplotCaudal').getContext('2d');
+                boxplotChart = new Chart(ctxBoxplot, {
+                    type: 'boxplot',
+                    data: {
+                        labels: ['Caudal de Agua'],
+                        datasets: [{
+                            label: 'Distribución del Caudal',
+                            data: [resultados.caudales],
+                            backgroundColor: 'rgba(153, 102, 255, 0.7)',
+                            borderColor: 'rgba(153, 102, 255, 1)',
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: { title: { display: true, text: 'Caudal (L/min)' } }
+                        }
+                    }
+                });
+
+            } catch (error) {
+                console.error('Error al crear gráficos:', error);
+                document.getElementById('status').textContent = 'Error al crear gráficos: ' + error.message;
+            }
+        }
+        
+        // Función para mostrar análisis de sensibilidad
+        function mostrarSensibilidad(resultados) {
+            const container = document.getElementById('sensibilidadPlot');
+            const loadingElement = document.getElementById('loading3D');
+            
+            // Mostrar estado de carga
+            loadingElement.innerHTML = '<div class="spinner"></div><p>Generando visualización 3D...</p>';
+            
+            setTimeout(() => {
+                try {
+                    // Crear el gráfico 3D
+                    const data = [{
+                        type: 'scatter3d',
+                        mode: 'markers',
+                        x: resultados.map(r => r.humedad),
+                        y: resultados.map(r => r.temperatura),
+                        z: resultados.map(r => r.prob_eficiente),
+                        text: resultados.map(r => 
+                            `Humedad: ${r.humedad.toFixed(1)}%<br>` +
+                            `Temp: ${r.temperatura.toFixed(1)}°C<br>` +
+                            `Eficiencia: ${r.prob_eficiente.toFixed(1)}%`),
+                        hoverinfo: 'text',
+                        marker: {
+                            size: 8,
+                            color: resultados.map(r => r.prob_eficiente),
+                            colorscale: 'Viridis',
+                            cmin: 0,
+                            cmax: 100,
+                            opacity: 0.8,
+                            colorbar: {
+                                title: 'Eficiencia (%)',
+                                titleside: 'right'
+                            }
+                        }
+                    }];
+                    
+                    const layout = {
+                        title: '<b>Análisis de Sensibilidad</b><br>Humedad vs Temperatura vs Eficiencia',
+                        scene: {
+                            xaxis: {title: 'Humedad (%)', range: [30,70]},
+                            yaxis: {title: 'Temperatura (°C)', range: [15,35]},
+                            zaxis: {title: 'Eficiencia (%)', range: [0,100]},
+                            camera: {
+                                eye: {x: 1.5, y: 1.5, z: 0.8}
+                            }
+                        },
+                        margin: {l: 0, r: 0, b: 0, t: 40}
+                    };
+                    
+                    // Ocultar loader y mostrar gráfico
+                    loadingElement.style.display = 'none';
+                    Plotly.newPlot('sensibilidadPlot', data, layout);
+                    
+                } catch (error) {
+                    loadingElement.innerHTML = `<p style="color:red">Error al generar gráfico: ${error.message}</p>`;
+                    console.error(error);
+                }
+            }, 100);
+        }
+        
+        // Event listeners
+        document.getElementById('btn-simular').addEventListener('click', function() {
+            const humedad = parseFloat(document.getElementById('humedad').value);
+            const temperatura = parseFloat(document.getElementById('temperatura').value);
+            const simulaciones = parseInt(document.getElementById('simulaciones').value);
+            
+            document.getElementById('status').textContent = 'Calculando...';
+            document.getElementById('sensibilidadPlot').style.display = 'none';
+            
+            // Usar setTimeout para permitir que la UI se actualice
+            setTimeout(() => {
+                try {
+                    const sistema = new SistemaRiego();
+                    resultadosSimulacion = sistema.simular_riego(humedad, temperatura, simulaciones);
+                    
+                    mostrarMetricas(resultadosSimulacion);
+                    actualizarGraficos(resultadosSimulacion);
+                    document.getElementById('status').textContent = 'Simulación completada con éxito!';
+                } catch (error) {
+                    document.getElementById('status').textContent = 'Error: ' + error.message;
+                    console.error(error);
+                }
+            }, 100);
+        });
+        
+document.getElementById('btn-sensibilidad').addEventListener('click', function() {
+    if (!resultadosSimulacion) {
+        document.getElementById('status').textContent = 'Primero ejecuta una simulación básica';
+        return;
+    }
+    
+    document.getElementById('status').textContent = 'Calculando análisis de sensibilidad...';
+    document.getElementById('sensibilidadPlot').style.display = 'block';
+    
+    setTimeout(() => {
+        try {
+            const sistema = new SistemaRiego();
+            // Reducir el número de simulaciones para el análisis de sensibilidad
+            const sensibilidad = sistema.analizar_sensibilidad(
+                [30, 70], [15, 35], 2000  // Reducido a 2000 simulaciones por punto
+            );
+            
+            mostrarSensibilidad(sensibilidad);
+            document.getElementById('status').textContent = 'Análisis de sensibilidad completado!';
+        } catch (error) {
+            document.getElementById('status').textContent = 'Error: ' + error.message;
+            console.error(error);
+        }
+    }, 100);
+});
+        
+        // Ejecutar una simulación inicial al cargar la página
+        window.addEventListener('load', function() {
+            document.getElementById('btn-simular').click();
+        });
+    </script>
+</body>
+</html>
